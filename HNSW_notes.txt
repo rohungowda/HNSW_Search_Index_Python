@@ -1,0 +1,215 @@
+url: https://arxiv.org/pdf/1603.09320 
+
+HNSW incrementally builds multi-layer structure consisting of hierarchical set of proximity graphs ( layers )
+- logarithmic complexity scaling
+
+K-Nearest Neighbor Search - goal is to find K elements from the dataset that minimize the distance to a given query.
+Naive approaches of checking query to every element scales linearly making it not good for large-scale datasets.
+
+Approximate Nearest Neighbors - isn't exact search and allows small number of error
+recall - quality of inexact search
+	ratio between number of found true nearest neighbors and K documents returned
+However ANNS had performance degradation in case of low dimensional or clustered data
+
+HNSW can be viewed as an extension of probabilistic skip lists where proximity graphs are used instead of linked lists.
+
+Proximity graphs
+
+	- Start the search at some enter point and iteratively traverse the graph. 
+ 	- At each step of the traversal the algorithm examines the distances from a query to the neighbors of the base node 
+	- It selects the next base node that minimizes query distance
+ 	- On the way we constantly keep track of the best discovered neighbors. 
+
+K-NNs fall victim to
+1) power Law Scaling ( number of navigation steps increase disproportionally to the dataset size.
+2) Poor search Results due to poor global connectivity ( searches get stuck in local cluster and fail to find relevant nodes)
+
+Solution to this is Navigable Small World ( graph that uses logarithmic scaling)
+
+- graph is constructed via consecutive insertion of elements in random order by bidirectionally connecting them to the M closest neighbors from the previous elements. 
+- The M closest neighbors are found using the structure’s search procedure
+- This search is a variant of a greedy search from multiple random enter nodes.
+- Links to the closest neighbors of the elements inserted in the beginning of the construction later become bridges between the network hubs
+- This structure keeps the overall graph connectivity and allow the logarithmic scaling of the number of hops during greedy routing
+
+NSW routing process is divided into two phases -> zoom-out and zoom-in
+Greedy Algorithm starts in zoom-out phase, starting from a low degree node (few connections)
+As algorithm progressively increasing the node's degree (more and more connections) until you essentially get close to the query node
+However the average degree of node can stay relatively small, meaning we can get stuck in a local minimum
+
+Solution
+Start at a higher degree node (lot of connection)
+zoom-in using hub to find the query node
+Better results but still gets stuck due to power scaling and performs worse on high dimensional data.
+
+Idea of HNSW algorithm is to separate links according to length scale into different layers and then search in each layer (evaluate fic portions independently of network size)
+
+As you go down the layers (average typical distance between nodes is getting smaller) ( nodes are closer together ) - amount of steps to reach a node decreases
+
+Upper layers hold the zoom-in nodes ( hub nodes )
+Finds local minimum on layer l at node i
+starts at layer l- 1 at node i to find the local minimum
+
+Selecting proximity graph connections
+- The heuristic examines the candidates starting from the nearest (with respect to the inserted element) and creates a connection to a candidate only if it is closer
+to the base (inserted) element compared to any of the already connected candidates
+
+Algorithm Description
+ - emulate dynamic list W with two priority queues for better performance
+ - first phase set ef to 1 to only get one entry point
+ - when reaching layers <= insert_layer, ef changes from 1 to efConstruction, which controls the recall of search
+
+If node is full, then the branches are pruned with neighbor heuristic algorithm
+For search - ground layer candidates are returned as relevant documents
+
+Influence of construction parameters
+mL - non-zero value-> 1 / ln(M)
+Mmax0 = M < x < 2 * M
+
+for lowdimensional, high recall for mid-dimensional, and higly clustered data -> extendCandidates proves to be very usefull
+
+Mmax0 has prominence in high recall search
+M range -> 5 - 48, smaller M better results for lower recalls and/ or lower dimensional dat
+bigger M better for high recall and/ or higher dimensional data
+
+
+
+efConstruction has to produce k-ANNS recall close to 1, 0.95 in most cases
+
+recall is a metric that measures the ability of a model to identify all relevant instances within a dataset. Specifically, recall is the proportion of true positive results out of the total number of actual positives.
+
+The formula for recall is:
+
+Recall=  True Positives / True Positives + False Negatives
+​
+
+In simpler terms, recall answers the question: Of all the relevant items, how many did the model correctly identify?
+
+
+
+Insert Algorithm
+
+W = list for currently found nearest elements
+
+ep = entry point for whole HNSW graph
+
+L = level of ep (top player of HNSW)
+
+insert_layer = floor [ -1 * ln(uniform(0...1)) * ml ]
+
+#does not include insert layer
+for lc in range( L , insert_layer, -1):
+|	W= SEARCH_LAYER( insert_node, entry_point, ef = 1, lc)
+|	ep = W[0] for element in LAYER BELOW
+
+for lc in range( min(L , insert_layer), -1 , -1):
+|	W = SEARCH_LAYER( insert_node, ep, efConstruction, lc)
+|	neighbors = SELECT_NEIGHBORS( insert_node, W, M, lc)
+|
+|	for each e in neighbors:
+|	|	eConnections = all of e's neighbors at layer lc
+|	|	if len(eConnections) > Mmax and lc > 0 or if len(eConnections) > Mmax0:
+|	|	|	eNewConnections = SELECT_NEIGHBORS(e, eConnections, Mmax/Mmax0, lc)
+|	|       |
+|	|	|	set e's neighborhood at layer lc to eNewConnections
+|       |
+|	ep = W for layer below
+|
+if insert_layer > L:
+	set entry point for hnsw to insert_node and L to be insert_layer
+
+SEARCH_LAYER Algorithm
+
+visited = set( ep )
+
+candidates = heap sorted by closest elemnts to insert_node
+
+W = heap sorted by farthest elemnts from insert_node
+
+while len(candidates) > 0:
+|	c = candidates.pop() # removes nearest element from C to insert_node
+|	f  W[0] # looks up farthest element from C to insert_node
+|	
+|	if c is farther from q than f:
+|	|	break
+|
+|	for each e in c's neighborhood at layer lc:
+|	|	if e is not in visited:
+|	|	|	visited.add(e)
+|	|	|	f = W[0]
+|	|	|	
+|	|	|	if e is closer to inser_node than f or len(W) < ef:
+|	|	|	|	candidattes.push(e)
+|	|	|	|	W.push(e)
+|	|	|	|	
+|	|	|	|	if len(W) > ef:
+|	|	|	|	|	W.pop()
+return sorted(W) closest - farthest
+
+
+SELECT_NEIGHBORS Algorithm 
+
+results = []
+visited = set([Candidates])
+W = working queue for Candidates ( heap for closest elements to insert_node )
+
+if extendCandidates:
+|	for each e in Candidates:
+|	|	for each n in e's neighbors:
+|	|	|	if n not in visited:
+|	|	|	|	W.append(n)
+
+dead_W = heap for closest elements to insert_node
+
+closest_score = float('-inf')
+
+while len(W) > 0 and len(results) < M:
+|	e = W.pop()
+|	if e is closer to q is closer than closest_score:
+|	|	results.append(e)
+|	else:
+|	|	dead_W.push(e)
+		
+if keepPrunedConnections:
+|	while len(dead_W) >0 and len(results) < M:
+|	|	results.append(dead_W.pop())
+return results
+
+K-NN Search:
+W = []
+ep = entry point for HNSW
+L = entry layer for HNSW (top most layer)
+
+for lc in L to 1:
+|	W = SEARCH_LAYER(insert_node, ep, ef=1, lc)
+|	ep = W for layer below
+W = SEARCH_LAYER( insert_node, ep, ef, lc = 0)
+return W[:K]
+
+
+BERT embeddings, cosine similarity
+
+class node{
+	node_id
+	embedding
+	neighbors
+
+	def __lt__
+	def __eq__
+
+}
+
+# for gathering neighbors we can gather nodes in bulk
+# cosine similarity
+# BERT Embeddings
+
+
+Metric Measure
+ - Query time in ms
+ - recall - Of all the relevant items, how many did the model correctly identify?
+ - precision - precision tells you how many of the items you retrieved are actually relevant.
+ - F1 Score
+ - Index Construction Time
+ - Scalability
+ - Memory Usage
+
